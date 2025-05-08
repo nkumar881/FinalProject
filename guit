@@ -1,0 +1,329 @@
+void sweep(){
+	int degree=0, beginDegree = 0, angSize = 0;
+	int objectLocation = 0;		//location of object in degrees
+	int objectCount = 0;		//total count of object
+	float rawDist = 0.0;		//used to average out distance of object
+	float actualDist = 0.0;		//actual distance in centimeters from object
+	float angWidth = 0.0;		//actual angular width/linear size of object
+	int objectIter = 0;			//used to divide raw distance for average distance of an object
+
+	/**
+	 *  OBJECT STATES (7):
+	 *
+	 *  BEGIN = 0: no objects have been detected. (iterate servo)
+	 *  FIRSTDETECT = 1: first data point that could be an object. *start values* (Prev. state == BEGIN || NOTOBJECT || NONE)
+	 *  STILLDETECT = 2: second data point that could be an object. *iterate values* (Prev. state == FIRSTDETECT)
+	 *  OBJECT = 3: third data point, so definitely an object since angular size is >= 4 degrees. *iterate values and count object* (Prev. state == STILLDETECT)
+	 *  NOTOBJECT = 4: Cant be an object because we didn't point three data points. *reset values* (Prev. state == FIRSTDETECT || STILLDETECT)
+	 *  STILLOBJECT = 5: fourth or more data point. Already know and counted it as an object *iterate values* (Prev. state == OBJECT || STILLOBJECT)
+	 *  NONE = 6: Object was detected, but not seen anymore. *do math and save values in object_data* (Prev. state == OBJECT || STILL OBJECT)
+	 */
+	int objectState = 0;
+
+	//Arrays to store Cartesian distance to be outputed to Putty.
+	float xCartesian[92] = {};
+	float yCartesian[92] = {};
+
+	//Data for each object detected to send over Putty (assumption that we max detect 6 objects)
+	struct object object_data[6];
+
+	for(degree=0; degree<=180; degree+=2){
+		move_servo(degree);	//move 2 degrees
+		timer_waitMillis(10);
+		float irDist = ir_getDistance();
+		float sonarDist = ping_getDistance();
+
+		//lcd_printf("Object State: %d\nIR (cm): %.1f\nSonar (cm): %.1f\nObject Count: %d",objectState, irDist, sonarDist, objectCount);
+
+		//FIRST DETECT STATE
+		if((sonarDist < 100.0) && (irDist < 100.0) && ((objectState == 0) || (objectState == 4) || (objectState == 6))){
+			//start values
+			objectState = 1;
+			beginDegree = degree;
+			rawDist += sonarDist;
+			objectIter++;
+		}
+		//STILL DETECT STATE
+		else if((irDist < 100.0) && (sonarDist < 100.0) && (objectState == 1)){
+			//object still detected (not first time seeing it)
+			objectState = 2;
+			rawDist += sonarDist;
+			objectIter++;
+		}
+		//OBJECT STATE
+		else if((sonarDist < 100.0) && (irDist < 100.0) && (objectState == 2)){
+			objectState = 3;
+			rawDist += sonarDist;
+			objectIter++;
+			objectCount++;
+		}
+		//NOT OBJECT STATE
+		else if(((sonarDist > 100.0) || (irDist > 100.0)) && ((objectState == 1) || (objectState == 2))){
+		    //Reset values
+		    if(objectCount < 1){
+		        objectState = 0;
+		    }
+		    else{
+		        objectState = 4;
+		    }
+		    rawDist = 0.0;
+		    objectIter = 0;
+		}
+		//STILL OBJECT STATE
+		else if((sonarDist < 100.0) && (irDist < 100.0) && (objectState == 3 || (objectState == 5))){
+		    //iterate values
+			objectState = 5;
+			rawDist += sonarDist;
+			objectIter++;
+		}
+		//NONE STATE
+		else if(((sonarDist > 100.0) || (irDist > 100.0)) && (objectState == 3 || (objectState == 5))){
+			objectState = 6;
+			objectLocation = ((degree-2) + beginDegree) / 2; 	//location of object in degrees (endingDegree - beginningDegree)/2
+			angSize = (degree-2) - beginDegree;					//angular size of object
+			actualDist = (rawDist/((float) objectIter));		//actual or averaged sensor distance away from object
+			rawDist = 0.0;										//reset raw distance to be used for new object
+			objectIter = 0;										//reset iterator to be used for new object
+
+			//calculate width of object, convert degrees to radians (degree*pi/180) for tanf() function
+			angWidth = 2 * actualDist * tanf((angSize*M_PI)/(2.0*180));
+
+			//Set detected object data
+			setObjectData(object_data, objectCount, angWidth, actualDist, objectLocation);
+		}
+
+		//Polar to Cartesian calculations for RadialPlot in excel
+		polar2Cart(degree, irDist, sonarDist, xCartesian, yCartesian);
+	}
+	//send Arrays of x and y cartesian coordinates to Putty
+	//arrayOutput(xCartesian, yCartesian);
+	//timer_waitMillis(2000);
+	arrayGridPutty(xCartesian, yCartesian);
+	timer_waitMillis(3000);
+	//send struct of object_data to Putty
+	objectDataOutput(object_data, objectCount);
+	move_servo(0);
+	timer_waitMillis(1000);
+}
+
+/**
+*  @file helpers.c
+*  @brief this file will contain all required helper functions
+*  used for formating object data and output to Putty.
+*
+*  @author	Brian Bradford, Nick Knuth, Andrew Thai, and Rajiv Bhoopala
+*
+*  @date	4/12/2017
+*/
+
+#include <math.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include "helpers.h"
+#include "uart.h"
+#include "commands.h"
+
+/**
+*	Convert polar coordinates to Cartesian, and cap distances to 100 cm.
+*	@author Brian Bradford, Nick Knuth, Andrew Thai, and Rajiv Bhoopala
+* 	@param degree	current degree of servo (0-180)
+* 	@param ir		ir sensor distance
+*	@param sonar		sonar sensor distance
+*	@param *x		Pointer to array to storing xCartesian distance
+*	@param *y		Pointer to array to storing yCartesian distance
+*	@date 4/12/2017
+*/
+void polar2Cart(int degree, float ir, float sonar, float *x, float *y){
+    int i = degree/2;
+    //Cap at 100 cm if distance is > 100.0 cm
+    if((ir > 100.0) || (sonar > 100.0)){
+        x[i] = 100.0 * cosf((degree*M_PI)/(180.0));
+        y[i] = 100.0 * sinf((degree*M_PI)/(180.0));
+    }
+    //Good distance data
+    else{
+        x[i] = sonar * cosf((degree*M_PI)/(180.0));
+        y[i] = sonar * sinf((degree*M_PI)/(180.0));
+    }
+}
+
+/**
+* 	Sets the proper data for each object detected to be outputted to Putty later.
+* 	@author Brian Bradford, Nick Knuth, Andrew Thai, and Rajiv Bhoopala
+* 	@param *object_data		Pointer to struct containing detected objects data
+* 	@param objectCount		Total count of objects seen in sweep
+* 	@param angWidth			Actual angular width/linear size of object
+*	@param actualDist		Actual distance in centimeters from object
+* 	@param objectLocation	Location of object in degrees
+*	@date 4/12/2017
+*/
+void setObjectData(struct object *object_data, int objectCount, float angWidth, float actualDist, int objectLocation){
+    int i=0;
+    //Detected object data
+    switch(objectCount){
+    //Default case, no objected detected. Array initialized to 0.
+    case 0:
+        for(i=0;i<6;i++){
+            object_data[i].width = 0.0;
+            object_data[i].distance = 0.0;
+            object_data[i].count = 0;
+            object_data[i].location = 0;
+        }
+    //first object detected
+    case 1:
+        object_data[(objectCount-1)].width = angWidth;
+        object_data[(objectCount-1)].distance = actualDist;
+        object_data[(objectCount-1)].count = objectCount;
+        object_data[(objectCount-1)].location = objectLocation;
+    break;
+    //second object detected
+    case 2:
+        object_data[(objectCount-1)].width = angWidth;
+        object_data[(objectCount-1)].distance = actualDist;
+        object_data[(objectCount-1)].count = objectCount;
+        object_data[(objectCount-1)].location = objectLocation;
+    break;
+    //third object detected
+    case 3:
+        object_data[(objectCount-1)].width = angWidth;
+        object_data[(objectCount-1)].distance = actualDist;
+        object_data[(objectCount-1)].count = objectCount;
+        object_data[(objectCount-1)].location = objectLocation;
+    break;
+    //fourth object detected
+    case 4:
+        object_data[(objectCount-1)].width = angWidth;
+        object_data[(objectCount-1)].distance = actualDist;
+        object_data[(objectCount-1)].count = objectCount;
+        object_data[(objectCount-1)].location = objectLocation;
+    break;
+    //fifth object detected
+    case 5:
+        object_data[(objectCount-1)].width = angWidth;
+        object_data[(objectCount-1)].distance = actualDist;
+        object_data[(objectCount-1)].count = objectCount;
+        object_data[(objectCount-1)].location = objectLocation;
+    break;
+    //sixth object detected
+    case 6:
+        object_data[(objectCount-1)].width = angWidth;
+        object_data[(objectCount-1)].distance = actualDist;
+        object_data[(objectCount-1)].count = objectCount;
+        object_data[(objectCount-1)].location = objectLocation;
+    break;
+    }
+}
+
+/**
+* 	Write cartesian values from arrays capped at a range of 100 cm to Putty for use of Radial plot in Putty.
+* 	@author Brian Bradford, Nick Knuth, Andrew Thai, and Rajiv Bhoopala
+* 	@param *x		Pointer to array to storing xCartesian distance
+* 	@param *y		Pointer to array to storing yCartesian distance
+* 	@date 4/12/2017
+*/
+void arrayOutput(float *x, float *y){
+    //Send xCartesian coordinate to Putty in form of string
+    uart_sendStr("xCartesian (capped at 100 cm)\r\n");
+    int i=0;
+    for(i = 0;i<91;i++){
+        char xBuff[50] = "\0";
+        snprintf(xBuff,50,"%f",x[i]);
+        uart_sendStr(xBuff);
+        uart_sendStr("\r\n");
+    }
+
+    //Space between x and y data
+    uart_sendStr("\r\n");
+
+    uart_sendStr("yCartesian (capped at 100 cm)\r\n");
+    //Send xCartesian coordinate to Putty in form of string
+    int j=0;
+    for(j = 0;j<91;j++){
+        char yBuff[50] = "\0";
+        snprintf(yBuff,50,"%f",y[j]);
+        uart_sendStr(yBuff);
+        uart_sendStr("\r\n");
+    }
+}
+
+/**
+* 	Print out a 2 dimensional array in Putty, based off of a radial plot for object detection.
+* 	@author Brian Bradford, Nick Knuth, Andrew Thai, and Rajiv Bhoopala
+*	@param *x		Pointer to array to storing xCartesian distance
+* 	@param *y		Pointer to array to storing yCartesian distance
+* 	@date 4/12/2017
+*/
+void arrayGridPutty(float *x, float *y){
+    int i = 0, j = 0;
+    char map[1][200];
+    //Final Y value to search for in cartesian array
+    for(i=100; i >= 0; i--)
+    {
+        //Flushing row string after each row
+        for(j = 0; j < 200; j++)
+        {
+            map[0][j] = ' ';
+        }
+        int abs_y = i;
+        //Iterating through the y cartesian value to find match
+        for(j = 0; j < 91; j++)
+        {
+            int tmp_y =  (int) roundf(y[j]);
+            if(tmp_y < 0)
+            {
+                tmp_y = 0;
+            }
+            //If match found set character at x value found at that y value
+            if(tmp_y == abs_y)
+            {
+                int abs_x = 100 + (int) roundf(x[j]);
+
+                map[0][abs_x] = 'X';
+            }
+        }
+        //print row at end of search for matching y value
+        int k=0;
+        for(k=0; k < 200; k++)
+        {
+            uart_sendChar(map[0][k]);
+        }
+        uart_sendChar('\n');
+        uart_sendChar('\r');
+    }
+}
+
+/**
+* 	Output info. from struct with object data to Putty.
+* 	@author Brian Bradford, Nick Knuth, Andrew Thai, and Rajiv Bhoopala
+* 	@param *object_data		Pointer to struct containing detected objects data
+* 	@param objectCount		Total count of objects seen in sweep
+* 	@date 4/12/2017
+*/
+void objectDataOutput(struct object *object_data, int objectCount){
+    char string[20];
+    snprintf(string, 20, "\r\n%d: objects!\r\n", objectCount);
+    uart_sendStr(string);
+    int i=0;
+    for(i=0;i<objectCount;i++){
+        //Output location to Putty
+        uart_sendStr("Location: ");
+        char locationBuff[4] = "\0";
+        snprintf(locationBuff,4,"%d",object_data[i].location);
+        uart_sendStr(locationBuff);
+        uart_sendStr("\r\n");
+
+        //Output distance to Putty
+        uart_sendStr("Distance: ");
+        char distanceBuff[50] = "\0";
+        snprintf(distanceBuff,50,"%.2f",object_data[i].distance);
+        uart_sendStr(distanceBuff);
+        uart_sendStr("\r\n");
+
+        //Output width to Putty
+        uart_sendStr("Width: ");
+        char widthBuff[50] = "\0";
+        snprintf(widthBuff,50,"%.2f",object_data[i].width);
+        uart_sendStr(widthBuff);
+        uart_sendStr("\r\n\r\n");
+    }
+}
