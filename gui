@@ -22,7 +22,7 @@
 // Uncomment or add any include directives that are needed
 void scan();
 void play_mario_theme();
-void printGui(char gui[17][8]);
+void printGui(char gui[34][16]);
 typedef struct
 {
     int startAngle;
@@ -104,7 +104,17 @@ void scan(objects obj[10])
 
     // this is for printing out onto the screen
 
-    char gui[17][8];            //max ping to be set at 80
+    char gui[34][16];
+    int c, r;
+    for (r = 0; r < 16; r++)
+    {
+        for (c = 0; c < 34; c++)
+        {
+            gui[c][r] = '.';
+        }
+
+    }
+    //max ping to be set at 80
 
     char str[50];
 
@@ -137,38 +147,69 @@ void scan(objects obj[10])
             int col, row;
             float x, y;
             float angleRad = i * (M_PI / 180.0);
-            if (distance >= 80)
-                distance = 80;
-            x = distance * cos(angleRad);
-            y = distance * sin(angleRad);
-            x /= 10;
-            y /= 10;
-            col = 8 + (floor(x));
+            if (dist >= 80)
+                dist = 80;
+            x = dist * cos(angleRad);
+            y = dist * sin(angleRad);
+            x /= 5;
+            y /= 5;
+            col = 16 + (floor(x));
             row = floor(y);
-            if (flag == 1)
-                gui[col][row] = 'X';
-            else
-                gui[col][row] = '0';
-
+//            if (row < 0)
+//                row = 0;
+//            if (row > 7)
+//                row = 7;
+//            if (col < 0)
+//                col = 0;
+//            if (col > 16)
+//                col = 16;
+            //if(flag==1){
+            if (col >= 0 && col < 34 && row >= 0 && row <= 16)
+//                if (flag == 1)
+//                {
+//                    if (gui[col][row] == 'X')
+//                        gui[col - 1][row] == 'X';
+//                }
+                //else
+                    gui[col][row] = 'X';
+            //  }
+            //if flag is 1.. and col is already occupied.. move it to left
         }
         else
         {
             int col, row;
             float x, y;
             float angleRad = (180 - i) * (M_PI / 180.0);
-            if (distance >= 80)
-                distance = 80;
-            x = distance * cos(angleRad);
-            y = distance * sin(angleRad);
+            if (dist >= 80)
+                dist = 80;
+            x = dist * cos(angleRad);
+            y = dist * sin(angleRad);
             x /= 10;
             y /= 10;
-            col = (floor(x));
+            col =  (floor(x));
             row = floor(y);
-            if (flag == 1)
-                gui[col][row] = 'X';
-            else
-                gui[col][row] = ' ';
-
+//            if (row < 0)
+//                            row = 0;
+//                        if (row > 7)
+//                            row = 7;
+//                        if (col < 0)
+//                            col = 0;
+//                        if (col > 16)
+//                            col = 16;
+//            if (flag == 1)
+//                gui[col][row] = 'X';
+//            else
+//                gui[col][row] = ' ';
+            // if(flag==1){
+            if (col >= 0 && col <= 16 && row >= 0 && row < 16)
+//                if (flag == 1)
+//                {
+//                    if (gui[col][row] == 'X')
+//                        gui[col - 1][row] == 'X';
+//                }
+//                else
+                    gui[col][row] = 'X';
+            //}
         }
 
         //and this should potentially be enough to print out the gui
@@ -244,17 +285,29 @@ void play_mario_theme()
     oi_play_song(0);
 }
 
-void printGui(char gui[17][8])
+void printGui(char gui[34][16])
 {
     int i, j;
-    for (i = 0; i < 8; i++)
+    uart_sendChar1('+');
+    for (j = 0; j < 34; j++)
+        uart_sendChar1('-');
+    uart_sendChar1('+');
+    uart_sendStr1("\n\r");
+
+    for (i = 15; i >= 0; i--)  // optional: print from top to bottom
     {
-        for (j = 0; j < 17; j++)
+        uart_sendChar1('|');
+        for (j = 0; j < 34; j++)
         {
-//            char c=gui[j][i];
-//            uart_sendChar1(c);
-            uart_sendChar1('a');
+            uart_sendChar1(gui[j][i]);
         }
+        uart_sendChar1('|');
         uart_sendStr1("\n\r");
     }
+
+    uart_sendChar1('+');
+    for (j = 0; j < 34; j++)
+        uart_sendChar1('-');
+    uart_sendChar1('+');
+    uart_sendStr1("\n\r");
 }
