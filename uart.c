@@ -1,66 +1,52 @@
-/*
- * button.c
- *
- * @author Mitch Folwer, Nikhil Kumar, Adam, Brandon Beaver
- */
+#include "adc.h"
+#include <stdint.h>
+#include <inc/tm4c123gh6pm.h>
 
 
 
-//The buttons are on PORTE 3:0
-// GPIO_PORTE_DATA_R -- Name of the memory mapped register for GPIO Port E,
-// which is connected to the push buttons
-#include "button.h"
 
 
-/**
- * Initialize PORTE and configure bits 0-3 to be used as inputs for the buttons.
- */
-void button_init() {
-	static uint8_t initialized = 0;
+void adc_init(void)
+{
+    SYSCTL_RCGCADC_R |= 0x01; // Enable clock
+    SYSCTL_RCGCGPIO_R |= 0x02;      // Enable Port B clock
+    while ((SYSCTL_PRGPIO_R & 0x02) == 0);
 
-	//Check if already initialized
-	if(initialized){
-		return;
-	}
+    GPIO_PORTB_DIR_R &= ~0x10;
+    GPIO_PORTB_DEN_R &= ~0x10;
+    GPIO_PORTB_AFSEL_R |= 0x10;
+    GPIO_PORTB_AMSEL_R |= 0x10;
 
-	SYSCTL_RCGCGPIO_R |= 0b10000;//initalizes the clock 100000 for port e
-	while ((SYSCTL_PRGPIO_R & 0x10) == 0) //hex for port e
-	{
-	    long delay = SYSCTL_RCGCGPIO_R;
-	}
-	GPIO_PORTE_DIR_R &=0b11110000;//bitwise and to mask last 4 bits to 0(active low for the switches)
-	GPIO_PORTE_DEN_R |=0b00001111;//bitwise or to mask them to 1 whichis off (first 4 bits remain the same)
-	initialized = 1;
+    while ((SYSCTL_PRADC_R & 0x01) == 0);
+
+    ADC0_ACTSS_R &= ~0x08;
+    ADC0_SSMUX3_R = 10;
+    ADC0_SSCTL3_R = 0x06;
+    ADC0_IM_R &= ~0x08;
+    ADC0_ACTSS_R |= 0x08;
 }
 
-
-
-/**
- * Returns the position of the rightmost button being pushed.
- * @return the position of the rightmost button being pushed. 1 is the leftmost button, 4 is the rightmost button.  0 indicates no button being pressed
- */
-uint8_t button_getButton() {
-
-	// INSERT CODE HERE!
-
-    if((GPIO_PORTE_DATA_R & 0b00001000) == 0b00000000)
+// Read one sample from ADC0 SS3
+uint16_t adc_read(void)
+{
+    ADC0_PSSI_R |= 0x08;
+    while ((ADC0_RIS_R & 0x08) == 0)
     {
-        return 4;
+    };
+    uint16_t result = ADC0_SSFIFO3_R & 0xFFF;
+    ADC0_ISC_R = 0x08;
+    return result;
+}
+
+//this  is prolly useless
+int adc_read_avg(int samples)
+{
+    uint32_t sum = 0;
+
+    int i;
+    for ( i = 0; i < samples; i++)
+    {
+        sum += adc_read();
     }
-    if((GPIO_PORTE_DATA_R & 0b00000100) == 0b00000000)
-       {
-           return 3;
-       }
-
-    if((GPIO_PORTE_DATA_R & 0b00000010) == 0b00000000)
-       {
-           return 2;
-       }
-
-    if((GPIO_PORTE_DATA_R & 0b00000001) == 0b00000000)
-       {
-           return 1;
-       }
-
-	return 0; // EDIT ME
+    return (int) (sum / samples);
 }
